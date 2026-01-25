@@ -78,8 +78,8 @@ optimize_kernel_parameters() {
 
     # 下载优化：接收缓冲区 = 3倍下载BDP（确保下载性能）
     recv_multiplier=3
-    # 上传优化：发送缓冲区 = 1.5倍上传BDP（确保上传速率，避免bufferbloat）
-    send_multiplier=1.5
+    # 上传优化：发送缓冲区 = 2倍上传BDP（确保上传速率，避免bufferbloat）
+    send_multiplier=2
     
     # 计算目标缓冲区大小
     target_recv_buffer_bytes=$(awk "BEGIN{printf \"%.0f\", ${download_bdp_bytes} * ${recv_multiplier}}")
@@ -87,7 +87,7 @@ optimize_kernel_parameters() {
     
     # 设置合理的最小值（基于实际带宽）
     min_recv_buffer_bytes=$((32 * 1024 * 1024))  # 下载最小32MB
-    min_send_buffer_bytes=$((4 * 1024 * 1024))   # 上传最小4MB
+    min_send_buffer_bytes=$((16 * 1024 * 1024))   # 上传最小16MB
 
     # 确保不小于最小值
     if [ "$target_recv_buffer_bytes" -lt "$min_recv_buffer_bytes" ]; then
