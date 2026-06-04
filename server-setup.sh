@@ -148,11 +148,37 @@ dump_effective_ssh_config() {
 }
 
 ensure_sshd_dropin_include() {
-	local include_line="Include /etc/ssh/sshd_config.d/*.conf"
+	local include_target="/etc/ssh/sshd_config.d/*.conf"
+	local include_line="Include ${include_target}"
 	local tmp_file
 
-	if head -n 1 "$SSHD_CONFIG" | grep -Eiq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf([[:space:]]|$)' &&
-		[ "$(grep -Eic '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf([[:space:]]|$)' "$SSHD_CONFIG")" -eq 1 ]; then
+	if head -n 1 "$SSHD_CONFIG" | awk -v target="$include_target" '
+		tolower($1) == "include" {
+			for (i = 2; i <= NF; i++) {
+				if ($i ~ /^#/) {
+					break
+				}
+				if ($i == target) {
+					found = 1
+				} else {
+					extra = 1
+				}
+			}
+		}
+		END { exit !(found && !extra) }
+	' && [ "$(awk -v target="$include_target" '
+		tolower($1) == "include" {
+			for (i = 2; i <= NF; i++) {
+				if ($i ~ /^#/) {
+					break
+				}
+				if ($i == target) {
+					count++
+				}
+			}
+		}
+		END { print count + 0 }
+	' "$SSHD_CONFIG")" -eq 1 ]; then
 		return 0
 	fi
 
@@ -160,8 +186,29 @@ ensure_sshd_dropin_include() {
 	tmp_file=$(mktemp)
 	{
 		echo "$include_line"
-		awk '
-			tolower($1) == "include" && $2 == "/etc/ssh/sshd_config.d/*.conf" { next }
+		awk -v target="$include_target" '
+			tolower($1) == "include" {
+				remaining = ""
+				comment = ""
+				for (i = 2; i <= NF; i++) {
+					if ($i ~ /^#/) {
+						for (j = i; j <= NF; j++) {
+							comment = comment (comment == "" ? "" : OFS) $j
+						}
+						break
+					}
+					if ($i == target) {
+						continue
+					}
+					remaining = remaining (remaining == "" ? "" : OFS) $i
+				}
+				if (remaining != "") {
+					print "Include " remaining (comment == "" ? "" : OFS comment)
+				} else if (comment != "") {
+					print comment
+				}
+				next
+			}
 			{ print }
 		' "$SSHD_CONFIG"
 	} >"$tmp_file"
