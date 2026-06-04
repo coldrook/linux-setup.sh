@@ -17,6 +17,10 @@
 # ===================================================================================
 
 optimize_kernel_parameters() {
+    is_positive_number() {
+        [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk "BEGIN {exit !($1 > 0)}"
+    }
+
     # 确认操作
     read -p "您确定要优化Linux内核网络与内存参数吗？这将修改 '/etc/sysctl.conf'。 (y/n): " choice
     case "$choice" in
@@ -30,6 +34,7 @@ optimize_kernel_parameters() {
     esac
 
     # --- 步骤 1: 备份原始配置文件 ---
+    backup_file=""
     if [ -f /etc/sysctl.conf ]; then
         backup_file="/etc/sysctl.conf.bak.$(date +%Y%m%d_%H%M%S)"
         echo "--> 正在备份当前配置到: ${backup_file}"
@@ -56,9 +61,14 @@ optimize_kernel_parameters() {
     fi
 
     # 确保输入不为空，提供一个最终的默认值
-    : ${rtt:=170}
-    : ${download_bw:=1000}
-    : ${upload_bw:=100}
+    : "${rtt:=170}"
+    : "${download_bw:=1000}"
+    : "${upload_bw:=100}"
+
+    if ! is_positive_number "$rtt" || ! is_positive_number "$download_bw" || ! is_positive_number "$upload_bw"; then
+        echo "====== [错误] RTT、下载带宽、上传带宽必须是大于 0 的数字。 ======"
+        exit 1
+    fi
 
     # --- 步骤 4: 分别计算下载和上传的BDP (带宽延迟积) ---
     # 下载BDP (接收方向)
@@ -101,7 +111,7 @@ optimize_kernel_parameters() {
     fi
 
     # 根据网络情况计算 tcp_adv_win_scale
-    if [ "$download_bw" -eq "$upload_bw" ]; then
+    if awk "BEGIN {exit !(${download_bw} == ${upload_bw})}"; then
         echo "    [信息] 上下行带宽对等，tcp_adv_win_scale 设为: 1"
         tcp_adv_win_scale=1
     else
@@ -229,8 +239,8 @@ optimize_kernel_parameters() {
 net.ipv4.tcp_congestion_control = bbr
 # 设置默认的网络包调度算法为FQ。
 net.core.default_qdisc = fq
-# 设置：优化拥塞控制行为，减少保守性
-net.ipv4.tcp_moderate_rcvbuf = 0
+# 启用 TCP 接收缓冲区自动调整，适配不同连接的带宽延迟积。
+net.ipv4.tcp_moderate_rcvbuf = 1
 
 # ---- B. 全局套接字缓冲区核心参数 ----
 # 优化：下载优先，上传够用即可
@@ -267,9 +277,6 @@ net.ipv4.tcp_retries1 = 3
 net.ipv4.tcp_retries2 = 10
 # 适度丢包检测
 net.ipv4.tcp_frto = 1
-# 优化：禁用发送缓冲区的自动调整，避免上传波动
-net.ipv4.tcp_moderate_rcvbuf = 1
-
 # ---- D. UDP/QUIC 性能优化 (针对 Hysteria2) ----
 # 设置系统所有UDP套接字可以占用的内存大小(单位: page)。
 net.ipv4.udp_mem = ${udp_mem_min_pages} ${udp_mem_pressure_pages} ${udp_mem_max_pages}
@@ -345,14 +352,19 @@ EOM
     # --- 步骤 11: 应用新的内核参数 ---
     echo "--> 正在应用新的内核参数..."
     # 执行sysctl -p并显示其输出，以便用户确认
-    sysctl -p /etc/sysctl.conf
-    if [ $? -eq 0 ]; then
+    if sysctl -p /etc/sysctl.conf; then
         echo "====== 内核参数优化成功并已生效！ ======"
         echo "====== 配置信息已记录在配置块的注释中，便于后续维护。 ======"
         echo "====== 脏页参数已根据${mem_mb}MB内存进行优化配置。 ======"
         echo "====== 为确保所有网络相关设置完全应用，建议您重启服务器。 ======"
     else
         echo "====== [错误] 应用内核参数时出错，请检查 /etc/sysctl.conf 的语法。 ======"
+        if [ -n "$backup_file" ] && [ -f "$backup_file" ]; then
+            echo "====== 正在从备份恢复 /etc/sysctl.conf: $backup_file ======"
+            cp "$backup_file" /etc/sysctl.conf
+            sysctl -p /etc/sysctl.conf
+        fi
+        return 1
     fi
 }
 

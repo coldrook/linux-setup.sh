@@ -85,18 +85,18 @@
 请使用 `root` 或具有 `sudo` 权限的用户执行：
 
 ```bash
-/bin/bash <(wget -qO - [https://raw.githubusercontent.com/SuperNG6/linux-setup.sh/main/server-setup.sh](https://raw.githubusercontent.com/SuperNG6/linux-setup.sh/main/server-setup.sh))
-````
+/bin/bash <(wget -qO - https://raw.githubusercontent.com/SuperNG6/linux-setup.sh/main/server-setup.sh)
+```
 
 **备用链接与国内加速:**
 
 ```bash
 # 短链接
 /bin/bash <(wget -qO - bit.ly/ls-set)
-/bin/bash <(wget -qO - [https://tinyurl.com/server-setup](https://tinyurl.com/server-setup))
+/bin/bash <(wget -qO - https://tinyurl.com/server-setup)
 
 # 国内服务器专用加速
-/bin/bash <(wget -qO - [https://mirror.ghproxy.com/https://raw.githubusercontent.com/SuperNG6/linux-setup.sh/main/server-setup.sh](https://mirror.ghproxy.com/https://raw.githubusercontent.com/SuperNG6/linux-setup.sh/main/server-setup.sh))
+/bin/bash <(wget -qO - https://mirror.ghproxy.com/https://raw.githubusercontent.com/SuperNG6/linux-setup.sh/main/server-setup.sh)
 ```
 
 启动后，根据菜单提示输入数字选择相应功能即可。

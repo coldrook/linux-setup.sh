@@ -14,6 +14,14 @@ check_docker_compose_version() {
     fi
 }
 
+run_docker_compose() {
+    if [ "$compose_cmd" = "docker compose" ]; then
+        docker compose "$@"
+    else
+        docker-compose "$@"
+    fi
+}
+
 # 函数：选择Docker Compose目录
 select_docker_compose_dir() {
     # 检查当前目录是否包含docker-compose.yml或docker-compose.yaml
@@ -68,7 +76,8 @@ select_docker_compose_dir() {
 select_container() {
     local prompt="$1"
     local selected_container=""
-    local containers=($(docker ps --format "{{.Names}}"))
+    local containers=()
+    mapfile -t containers < <(docker ps --format "{{.Names}}")
 
     if [ ${#containers[@]} -eq 0 ]; then
         echo "没有正在运行的Docker容器。" >&2
@@ -95,10 +104,18 @@ select_container() {
             else
                 echo "输入的数字无效，请输入 1 到 ${#containers[@]} 之间的数字。" >&2
             fi
-        elif [[ " ${containers[@]} " =~ " ${input} " ]]; then
-            selected_container="$input"
-            break
         else
+            for container in "${containers[@]}"; do
+                if [ "$container" = "$input" ]; then
+                    selected_container="$input"
+                    break
+                fi
+            done
+
+            if [ -n "$selected_container" ]; then
+                break
+            fi
+
             echo "无效的输入。请从下面的列表中选择。" >&2
             echo "可用的容器：" >&2
             for i in "${!containers[@]}"; do
@@ -109,4 +126,50 @@ select_container() {
     done
 
     echo "$selected_container"
+}
+
+resolve_container() {
+    local input="$1"
+    local containers=()
+    mapfile -t containers < <(docker ps --format "{{.Names}}")
+
+    if [ ${#containers[@]} -eq 0 ]; then
+        echo "没有正在运行的Docker容器。" >&2
+        return 1
+    fi
+
+    if [[ "$input" =~ ^[0-9]+$ ]]; then
+        if ((input > 0 && input <= ${#containers[@]})); then
+            echo "${containers[$((input-1))]}"
+            return 0
+        else
+            echo "输入的数字无效，请输入 1 到 ${#containers[@]} 之间的数字。" >&2
+            return 1
+        fi
+    fi
+
+    for container in "${containers[@]}"; do
+        if [ "$container" = "$input" ]; then
+            echo "$container"
+            return 0
+        fi
+    done
+
+    echo "未找到正在运行的容器: $input" >&2
+    echo "可用的容器：" >&2
+    for i in "${!containers[@]}"; do
+        echo "$((i + 1)). ${containers[$i]}" >&2
+    done
+    return 1
+}
+
+container_arg_or_select() {
+    local input="$1"
+    local prompt="$2"
+
+    if [ -n "$input" ]; then
+        resolve_container "$input"
+    else
+        select_container "$prompt"
+    fi
 }

@@ -22,6 +22,7 @@ while getopts "rR" opt; do
       ;;
     \? )
       echo "用法: $0 [-r] [-R]"
+      # shellcheck disable=SC2154 # compose_cmd 由 docker_utils.sh 设置
       echo "  -r: 快速重启 (默认, 使用 $compose_cmd restart)"
       echo "  -R: 完全重建 (使用 $compose_cmd down 和 up)"
       exit 1

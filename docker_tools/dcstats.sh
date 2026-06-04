@@ -11,6 +11,7 @@ check_docker_compose_version
 select_docker_compose_dir
 
 # 显示$compose_cmd状态
+# shellcheck disable=SC2154 # selected_folder/compose_cmd 由 docker_utils.sh 设置
 echo "正在检查 $selected_folder 的 $compose_cmd 容器状态..."
 $compose_cmd stats
 

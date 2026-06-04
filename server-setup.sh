@@ -18,6 +18,9 @@ FIREWALL_TYPE=""
 # 脚本启动时检查一次操作系统类型，并存入全局变量
 OS_TYPE=""
 
+SSHD_CONFIG="/etc/ssh/sshd_config"
+SSHD_MANAGED_CONFIG="/etc/ssh/sshd_config.d/99-linux-setup.conf"
+
 # --- 基础检查与环境设置 ---
 
 # 检查是否具有足够的权限
@@ -102,6 +105,161 @@ check_firewall() {
 	else
 		echo "unknown"
 	fi
+}
+
+get_ssh_service() {
+	local service
+	for service in sshd ssh; do
+		if systemctl list-unit-files "${service}.service" --no-legend 2>/dev/null | grep -q "^${service}.service"; then
+			echo "$service"
+			return 0
+		fi
+		if systemctl list-units "${service}.service" --all --no-legend 2>/dev/null | grep -q "^${service}.service"; then
+			echo "$service"
+			return 0
+		fi
+	done
+
+	echo ""
+}
+
+validate_ssh_config() {
+	if command -v sshd &>/dev/null; then
+		sshd -t
+	elif [ -x /usr/sbin/sshd ]; then
+		/usr/sbin/sshd -t
+	else
+		echo "错误: 未找到 sshd，无法校验 SSH 配置。" >&2
+		return 1
+	fi
+}
+
+dump_effective_ssh_config() {
+	if command -v sshd &>/dev/null; then
+		sshd -T
+	elif [ -x /usr/sbin/sshd ]; then
+		/usr/sbin/sshd -T
+	else
+		echo "错误: 未找到 sshd，无法读取 SSH 生效配置。" >&2
+		return 1
+	fi
+}
+
+ensure_sshd_dropin_include() {
+	if head -n 1 "$SSHD_CONFIG" | grep -Eiq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf'; then
+		return 0
+	fi
+
+	echo "正在将 sshd_config drop-in Include 放到文件顶部，确保脚本管理的配置优先生效。"
+	sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' "$SSHD_CONFIG"
+}
+
+backup_ssh_state() {
+	local backup_dir
+	backup_dir=$(mktemp -d)
+	cp "$SSHD_CONFIG" "${backup_dir}/sshd_config"
+	if [ -f "$SSHD_MANAGED_CONFIG" ]; then
+		cp "$SSHD_MANAGED_CONFIG" "${backup_dir}/managed_config"
+	fi
+	echo "$backup_dir"
+}
+
+restore_ssh_state() {
+	local backup_dir=$1
+
+	if [ -z "$backup_dir" ] || [ ! -d "$backup_dir" ]; then
+		return 1
+	fi
+
+	cp "${backup_dir}/sshd_config" "$SSHD_CONFIG"
+	if [ -f "${backup_dir}/managed_config" ]; then
+		mkdir -p "$(dirname "$SSHD_MANAGED_CONFIG")"
+		cp "${backup_dir}/managed_config" "$SSHD_MANAGED_CONFIG"
+	else
+		rm -f "$SSHD_MANAGED_CONFIG"
+	fi
+}
+
+write_ssh_managed_config() {
+	local new_port=$1
+	local password_mode=$2
+	local existing_port=""
+	local password_disabled=false
+	local final_port
+	local tmp_file
+
+	mkdir -p "$(dirname "$SSHD_MANAGED_CONFIG")"
+
+	if [ -f "$SSHD_MANAGED_CONFIG" ]; then
+		existing_port=$(awk 'tolower($1) == "port" {print $2; exit}' "$SSHD_MANAGED_CONFIG")
+		if grep -Eiq '^[[:space:]]*PasswordAuthentication[[:space:]]+no' "$SSHD_MANAGED_CONFIG"; then
+			password_disabled=true
+		fi
+	fi
+
+	final_port=${new_port:-$existing_port}
+	tmp_file=$(mktemp)
+
+	{
+		echo "# Managed by linux-setup.sh"
+		echo "# Do not edit manually unless you stop using the script."
+		if [ -n "$final_port" ]; then
+			echo "Port $final_port"
+		fi
+		if [ "$password_mode" = "no" ] || { [ "$password_mode" = "keep" ] && [ "$password_disabled" = true ]; }; then
+			echo "PasswordAuthentication no"
+			echo "KbdInteractiveAuthentication no"
+			echo "ChallengeResponseAuthentication no"
+		fi
+	} >"$tmp_file"
+
+	mv "$tmp_file" "$SSHD_MANAGED_CONFIG"
+}
+
+verify_ssh_password_disabled() {
+	local effective_config
+	local password_auth
+	local kbd_auth
+	local challenge_auth
+
+	effective_config=$(dump_effective_ssh_config) || return 1
+	password_auth=$(awk '$1 == "passwordauthentication" {print $2; exit}' <<<"$effective_config")
+	kbd_auth=$(awk '$1 == "kbdinteractiveauthentication" {print $2; exit}' <<<"$effective_config")
+	challenge_auth=$(awk '$1 == "challengeresponseauthentication" {print $2; exit}' <<<"$effective_config")
+
+	if [ "$password_auth" != "no" ]; then
+		echo "错误: SSH 生效配置中 PasswordAuthentication 不是 no。" >&2
+		return 1
+	fi
+	if [ -n "$kbd_auth" ] && [ "$kbd_auth" != "no" ]; then
+		echo "错误: SSH 生效配置中 KbdInteractiveAuthentication 不是 no。" >&2
+		return 1
+	fi
+	if [ -n "$challenge_auth" ] && [ "$challenge_auth" != "no" ]; then
+		echo "错误: SSH 生效配置中 ChallengeResponseAuthentication 不是 no。" >&2
+		return 1
+	fi
+}
+
+verify_ssh_port_effective() {
+	local expected_port=$1
+
+	if ! dump_effective_ssh_config | awk '$1 == "port" {print $2}' | grep -qx "$expected_port"; then
+		echo "错误: SSH 生效配置中未找到端口 $expected_port。" >&2
+		return 1
+	fi
+}
+
+restart_ssh_service() {
+	local ssh_service
+	ssh_service=$(get_ssh_service)
+
+	if [ -z "$ssh_service" ]; then
+		echo "错误: 未找到 SSH 服务 (ssh/sshd)。" >&2
+		return 1
+	fi
+
+	systemctl restart "$ssh_service"
 }
 
 # [适配器] 开放指定端口
@@ -193,7 +351,8 @@ firewall_close_port() {
 		;;
 	"nftables")
 		# nftables 删除规则需要先找到规则的 handle
-		local handle=$(nft -a list ruleset | grep "dport $port" | grep "$protocol" | grep "accept" | awk '{print $NF}')
+		local handle
+		handle=$(nft -a list ruleset | grep "dport $port" | grep "$protocol" | grep "accept" | awk '{print $NF}')
 		if [ -n "$handle" ]; then
 			nft delete rule inet filter input handle "$handle"
 			# 尝试持久化规则
@@ -264,29 +423,24 @@ install_components() {
 
 	echo "正在安装必要组件..."
 
-	local pkg_manager=""
 	local update_cmd=""
 	local install_cmd=""
 
 	# 根据操作系统设置包管理器命令
 	case $OS_TYPE in
 	"Debian/Ubuntu")
-		pkg_manager="apt"
 		update_cmd="apt-get update -y"
 		install_cmd="apt-get install -y"
 		;;
 	"CentOS")
-		pkg_manager="yum"
 		update_cmd="yum update -y"
 		install_cmd="yum install -y"
 		;;
 	"Fedora")
-		pkg_manager="dnf"
 		update_cmd="dnf update -y"
 		install_cmd="dnf install -y"
 		;;
 	"Arch")
-		pkg_manager="pacman"
 		update_cmd="pacman -Syu --noconfirm"
 		install_cmd="pacman -S --noconfirm"
 		;;
@@ -316,17 +470,15 @@ install_components() {
 
 	# 使用加速镜像（如果已设置）安装 Docker
 	local docker_url="https://get.docker.com"
+	local docker_args=(--version 28)
 	if [ -n "${ACC}" ]; then
 		# 在国内使用 Docker 官方脚本时，通过 --mirror 选项指定镜像源
-		bash <(curl -sSL "${docker_url}") "${ACC} --version 28" || {
-			echo "使用镜像安装 Docker 失败"
-			return 1
-		}
-	else
-		bash <(curl -sSL "${docker_url}") --version 28 || {
-			echo "安装 Docker 失败"
-			return 1
-		}
+		docker_args=(--mirror AzureChinaCloud --version 28)
+	fi
+
+	if ! bash <(curl -sSL "${docker_url}") "${docker_args[@]}"; then
+		echo "安装 Docker 失败"
+		return 1
 	fi
 
 	echo "Docker 安装成功。"
@@ -450,10 +602,10 @@ add_public_keys() {
 
 # 关闭 SSH 的密码登录功能，强制使用密钥登录，提高安全性
 disable_ssh_password_login() {
-	local sshd_config="/etc/ssh/sshd_config"
+	local backup_dir
 
-	if [ ! -f "$sshd_config" ]; then
-		echo "错误: sshd_config 文件不存在于 $sshd_config"
+	if [ ! -f "$SSHD_CONFIG" ]; then
+		echo "错误: sshd_config 文件不存在于 $SSHD_CONFIG"
 		return 1
 	fi
 
@@ -465,24 +617,24 @@ disable_ssh_password_login() {
 
 	echo "正在关闭SSH密码登录..."
 
-	# 备份原始 sshd_config 文件
-	cp "$sshd_config" "${sshd_config}.bak"
+	backup_dir=$(backup_ssh_state)
+	ensure_sshd_dropin_include
+	write_ssh_managed_config "" "no"
 
-	# 使用 sed 修改配置
-	# s/^[#\s]*PasswordAuthentication\s\+.*/PasswordAuthentication no/g
-	# 这个正则表达式会匹配行首任意数量的#和空格，然后是 "PasswordAuthentication" 和任意空格，最后是任意字符
-	# 并将其替换为 "PasswordAuthentication no"
-	sed -i 's/^[#\s]*PasswordAuthentication\s\+.*/PasswordAuthentication no/g' "$sshd_config"
-	# 确保 ChallengeResponseAuthentication 也被禁用
-	sed -i 's/^[#\s]*ChallengeResponseAuthentication\s\+.*/ChallengeResponseAuthentication no/g' "$sshd_config"
+	if ! validate_ssh_config || ! verify_ssh_password_disabled; then
+		echo "错误: SSH 配置校验失败。正在恢复配置..."
+		restore_ssh_state "$backup_dir"
+		return 1
+	fi
 
-	# 重启 sshd 服务以应用更改
-	if systemctl restart sshd; then
+	# 重启 SSH 服务以应用更改
+	if restart_ssh_service; then
 		echo "SSH密码登录已成功关闭。"
 	else
-		echo "错误: SSH服务重启失败。请检查 'systemctl status sshd' 获取详情。"
-		echo "正在从备份恢复 sshd_config 文件..."
-		mv "${sshd_config}.bak" "$sshd_config"
+		echo "错误: SSH服务重启失败。请检查 'systemctl status sshd' 或 'systemctl status ssh' 获取详情。"
+		echo "正在恢复 SSH 配置..."
+		restore_ssh_state "$backup_dir"
+		restart_ssh_service >/dev/null 2>&1
 		return 1
 	fi
 }
@@ -506,21 +658,46 @@ add_docker_tools() {
 
 # 删除所有 swap 文件和分区
 remove_all_swap() {
-	# 获取所有 swap 文件的列表
-	swap_files=$(swapon -s | awk '{if($1!~"^Filename"){print $1}}')
+	local swap_items=()
+	local item
+	local fstab_backup=""
+	local tmp_fstab
 
-	# 获取所有 swap 分区的列表
-	swap_partitions=$(grep -E '^\S+\s+\S+\sswap\s+' /proc/swaps | awk '{print $1}')
+	mapfile -t swap_items < <(awk 'NR > 1 {print $1}' /proc/swaps | sort -u)
 
-	# 遍历并禁用、删除每个 swap 文件和分区
-	for item in $swap_files $swap_partitions; do
-		echo "正在禁用并删除 swap ：$item"
-		swapoff "$item"
-		rm -f "$item"
-		echo "已删除 swap ：$item"
+	if [ ${#swap_items[@]} -eq 0 ]; then
+		echo "未检测到活动 swap。"
+		return 0
+	fi
+
+	if [ -f /etc/fstab ]; then
+		fstab_backup="/etc/fstab.bak.$(date +%Y%m%d_%H%M%S)"
+		cp /etc/fstab "$fstab_backup"
+		echo "已备份 /etc/fstab 到 $fstab_backup"
+	fi
+
+	for item in "${swap_items[@]}"; do
+		echo "正在禁用 swap：$item"
+		swapoff "$item" || {
+			echo "警告：禁用 swap 失败：$item"
+			continue
+		}
+
+		if [ -f "$item" ] && [ ! -b "$item" ]; then
+			rm -f "$item"
+			echo "已删除 swap 文件：$item"
+		else
+			echo "已禁用 swap 设备：$item（未删除设备节点）"
+		fi
+
+		if [ -f /etc/fstab ]; then
+			tmp_fstab=$(mktemp)
+			awk -v target="$item" '$1 != target {print}' /etc/fstab >"$tmp_fstab"
+			mv "$tmp_fstab" /etc/fstab
+		fi
 	done
 
-	echo "所有 swap 文件和分区已删除。"
+	echo "swap 处理完成。"
 }
 
 # 清理 swap 缓存
@@ -834,9 +1011,9 @@ uninstall_debian_cloud_kernel() {
 }
 # 修改SSH端口号
 modify_ssh_port() {
-	local sshd_config="/etc/ssh/sshd_config"
-	local current_port
-	current_port=$(grep -i "^\s*port" "$sshd_config" | awk '{print $2}' | tail -n 1)
+	local current_port opened_new_port=false
+	local backup_dir
+	current_port=$(dump_effective_ssh_config 2>/dev/null | awk '$1 == "port" {print $2; exit}')
 
 	if [ -z "$current_port" ]; then
 		current_port=22 # 默认端口
@@ -851,25 +1028,31 @@ modify_ssh_port() {
 	fi
 
 	echo "正在修改 SSH 端口为 $new_port..."
-	# 备份配置文件
-	cp "$sshd_config" "${sshd_config}.bak"
-	# 修改或添加 Port 配置
-	if grep -q "^\s*Port" "$sshd_config"; then
-		sed -i "s/^\s*Port.*/Port $new_port/" "$sshd_config"
-	else
-		echo "Port $new_port" >>"$sshd_config"
+	backup_dir=$(backup_ssh_state)
+	ensure_sshd_dropin_include
+	write_ssh_managed_config "$new_port" "keep"
+
+	if ! validate_ssh_config || ! verify_ssh_port_effective "$new_port"; then
+		echo "错误：SSH 配置校验失败，操作已回滚。"
+		restore_ssh_state "$backup_dir"
+		return 1
 	fi
 
-	# # 开放新端口
-	# firewall_open_port "$new_port" "tcp"
-	# if [ $? -ne 0 ]; then
-	#     echo "错误：在防火墙中开放新端口失败，操作已回滚。"
-	#     mv "${sshd_config}.bak" "$sshd_config"
-	#     return 1
-	# fi
+	# 先开放新端口，再重启 SSH，降低远程服务器断联风险。
+	if [ "$FIREWALL_TYPE" != "unknown" ]; then
+		if firewall_open_port "$new_port" "tcp"; then
+			opened_new_port=true
+		else
+			echo "错误：在防火墙中开放新端口失败，操作已回滚。"
+			restore_ssh_state "$backup_dir"
+			return 1
+		fi
+	else
+		echo "警告：未检测到支持的防火墙，跳过自动开放端口。"
+	fi
 
 	# 重启 SSH 服务
-	if systemctl restart sshd; then
+	if restart_ssh_service; then
 		echo "SSH 端口修改成功，新端口为 $new_port。"
 		echo "请记得使用新端口重新连接！"
 		# # 如果旧端口不是22，则可以选择关闭
@@ -881,8 +1064,11 @@ modify_ssh_port() {
 		# fi
 	else
 		echo "错误：SSH 服务重启失败。操作已回滚。"
-		mv "${sshd_config}.bak" "$sshd_config"
-		# firewall_close_port "$new_port" "tcp" # 回滚防火墙规则
+		restore_ssh_state "$backup_dir"
+		if [ "$opened_new_port" = true ] && [ "$new_port" != "$current_port" ]; then
+			firewall_close_port "$new_port" "tcp"
+		fi
+		restart_ssh_service >/dev/null 2>&1
 		return 1
 	fi
 }
@@ -1237,7 +1423,7 @@ display_menu() {
 	if [[ "$OS_TYPE" == "Debian/Ubuntu" ]]; then
 		echo -e "----------- ${BOLD}内核管理 (Debian/Ubuntu)${RESET} -------------"
 		echo -e "${GREEN} 14${RESET}      安装 XanMod 内核 (含BBRv3)"
-		echo -e "${GREEN} 16${RESET}      卸载 XanMod 内核"
+		echo -e "${GREEN} 15${RESET}      卸载 XanMod 内核"
 		if [[ $(grep -i "debian" /etc/os-release) ]]; then
 			echo -e "${GREEN} 16${RESET}      安装 Debian Cloud 内核"
 			echo -e "${GREEN} 17${RESET}      卸载 Debian Cloud 内核"
