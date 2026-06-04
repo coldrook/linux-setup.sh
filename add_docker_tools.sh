@@ -116,6 +116,7 @@ _docker_tools_container_names() {
     local current="\${COMP_WORDS[COMP_CWORD]}"
     local containers
     containers=\$(docker ps --format '{{.Names}}' 2>/dev/null)
+    compopt -o nosort 2>/dev/null || true
     mapfile -t COMPREPLY < <(compgen -W "\$containers" -- "\$current")
 }
 
