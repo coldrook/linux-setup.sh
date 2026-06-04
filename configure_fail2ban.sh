@@ -193,23 +193,44 @@ install_fail2ban() {
     fi
 }
 
-# 自动检测 SSH 端口
-get_ssh_port() {
-    local sshd_config="/etc/ssh/sshd_config"
-    local ssh_port
-    
-    if [ -f "$sshd_config" ]; then
-        # 获取未注释的 Port 配置
-        ssh_port=$(grep -i "^\s*Port\s" "$sshd_config" | awk '{print $2}' | tail -n 1)
-        
-        if [ -z "$ssh_port" ]; then
-            ssh_port=22  # 默认端口
-        fi
+dump_effective_ssh_config() {
+    if command -v sshd &>/dev/null; then
+        sshd -T
+    elif [ -x /usr/sbin/sshd ]; then
+        /usr/sbin/sshd -T
     else
-        ssh_port=22  # 如果配置文件不存在，使用默认端口
+        return 1
     fi
-    
-    echo "$ssh_port"
+}
+
+read_ssh_port_from_file() {
+    local config_file=$1
+    awk 'tolower($1) == "port" && $2 ~ /^[0-9]+$/ { print $2; exit }' "$config_file"
+}
+
+# 自动检测 SSH 生效端口
+get_ssh_port() {
+    local ssh_port
+    local config_file
+
+    ssh_port=$(dump_effective_ssh_config 2>/dev/null | awk '$1 == "port" && $2 ~ /^[0-9]+$/ { print $2; exit }')
+    if [ -n "$ssh_port" ]; then
+        echo "$ssh_port"
+        return 0
+    fi
+
+    for config_file in /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config; do
+        if [ ! -f "$config_file" ]; then
+            continue
+        fi
+        ssh_port=$(read_ssh_port_from_file "$config_file")
+        if [ -n "$ssh_port" ]; then
+            echo "$ssh_port"
+            return 0
+        fi
+    done
+
+    echo "22"
 }
 
 # 检查 Fail2ban 状态
@@ -250,7 +271,13 @@ generate_fail2ban_config() {
     local jail_local="/etc/fail2ban/jail.d/sshd-linux-setup.local"
     local custom_comment="# SSH protection configured by fail2ban.sh script"
     local log_path
+    local effective_ssh_port
     log_path=$(detect_ssh_log_path)
+    effective_ssh_port=$(get_ssh_port)
+    if [ -n "$effective_ssh_port" ] && [ "$effective_ssh_port" != "$ssh_port" ]; then
+        echo "🔍 SSH 生效端口为 $effective_ssh_port，已覆盖传入端口 $ssh_port。"
+        ssh_port="$effective_ssh_port"
+    fi
     
     echo "🔧 正在生成 Fail2ban 配置..."
     

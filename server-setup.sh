@@ -19,7 +19,9 @@ FIREWALL_TYPE=""
 OS_TYPE=""
 
 SSHD_CONFIG="/etc/ssh/sshd_config"
-SSHD_MANAGED_CONFIG="/etc/ssh/sshd_config.d/99-linux-setup.conf"
+SSHD_CONFIG_DIR="/etc/ssh/sshd_config.d"
+SSHD_MANAGED_CONFIG="/etc/ssh/sshd_config.d/00-linux-setup.conf"
+SSHD_LEGACY_MANAGED_CONFIG="/etc/ssh/sshd_config.d/99-linux-setup.conf"
 
 # --- 基础检查与环境设置 ---
 
@@ -146,20 +148,34 @@ dump_effective_ssh_config() {
 }
 
 ensure_sshd_dropin_include() {
-	if head -n 1 "$SSHD_CONFIG" | grep -Eiq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf'; then
+	local include_line="Include /etc/ssh/sshd_config.d/*.conf"
+	local tmp_file
+
+	if head -n 1 "$SSHD_CONFIG" | grep -Eiq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf([[:space:]]|$)' &&
+		[ "$(grep -Eic '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf([[:space:]]|$)' "$SSHD_CONFIG")" -eq 1 ]; then
 		return 0
 	fi
 
-	echo "正在将 sshd_config drop-in Include 放到文件顶部，确保脚本管理的配置优先生效。"
-	sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' "$SSHD_CONFIG"
+	echo "正在规范 sshd_config drop-in Include，确保脚本管理的配置优先生效。"
+	tmp_file=$(mktemp)
+	{
+		echo "$include_line"
+		awk '
+			tolower($1) == "include" && $2 == "/etc/ssh/sshd_config.d/*.conf" { next }
+			{ print }
+		' "$SSHD_CONFIG"
+	} >"$tmp_file"
+	cat "$tmp_file" >"$SSHD_CONFIG"
+	rm -f "$tmp_file"
 }
 
 backup_ssh_state() {
 	local backup_dir
 	backup_dir=$(mktemp -d)
 	cp "$SSHD_CONFIG" "${backup_dir}/sshd_config"
-	if [ -f "$SSHD_MANAGED_CONFIG" ]; then
-		cp "$SSHD_MANAGED_CONFIG" "${backup_dir}/managed_config"
+	if [ -d "$SSHD_CONFIG_DIR" ]; then
+		mkdir -p "${backup_dir}/sshd_config.d"
+		cp -a "${SSHD_CONFIG_DIR}/." "${backup_dir}/sshd_config.d/"
 	fi
 	echo "$backup_dir"
 }
@@ -172,12 +188,45 @@ restore_ssh_state() {
 	fi
 
 	cp "${backup_dir}/sshd_config" "$SSHD_CONFIG"
-	if [ -f "${backup_dir}/managed_config" ]; then
-		mkdir -p "$(dirname "$SSHD_MANAGED_CONFIG")"
-		cp "${backup_dir}/managed_config" "$SSHD_MANAGED_CONFIG"
+	if [ -d "${backup_dir}/sshd_config.d" ]; then
+		rm -rf "$SSHD_CONFIG_DIR"
+		mkdir -p "$SSHD_CONFIG_DIR"
+		cp -a "${backup_dir}/sshd_config.d/." "$SSHD_CONFIG_DIR/"
 	else
-		rm -f "$SSHD_MANAGED_CONFIG"
+		rm -f "$SSHD_MANAGED_CONFIG" "$SSHD_LEGACY_MANAGED_CONFIG"
 	fi
+}
+
+comment_conflicting_ssh_ports() {
+	local config_file
+	local tmp_file
+
+	for config_file in "$SSHD_CONFIG" "$SSHD_CONFIG_DIR"/*.conf; do
+		if [ ! -f "$config_file" ]; then
+			continue
+		fi
+		case "$config_file" in
+		"$SSHD_MANAGED_CONFIG" | "$SSHD_LEGACY_MANAGED_CONFIG")
+			continue
+			;;
+		esac
+		if ! grep -Eiq '^[[:space:]]*Port[[:space:]]+[0-9]+' "$config_file"; then
+			continue
+		fi
+
+		tmp_file=$(mktemp)
+		awk '
+			/^[[:space:]]*#/ { print; next }
+			tolower($1) == "match" { in_match = 1 }
+			!in_match && tolower($1) == "port" {
+				print "# Disabled by linux-setup.sh: " $0
+				next
+			}
+			{ print }
+		' "$config_file" >"$tmp_file"
+		cat "$tmp_file" >"$config_file"
+		rm -f "$tmp_file"
+	done
 }
 
 write_ssh_managed_config() {
@@ -187,15 +236,21 @@ write_ssh_managed_config() {
 	local password_disabled=false
 	local final_port
 	local tmp_file
+	local config_file
 
 	mkdir -p "$(dirname "$SSHD_MANAGED_CONFIG")"
 
-	if [ -f "$SSHD_MANAGED_CONFIG" ]; then
-		existing_port=$(awk 'tolower($1) == "port" {print $2; exit}' "$SSHD_MANAGED_CONFIG")
-		if grep -Eiq '^[[:space:]]*PasswordAuthentication[[:space:]]+no' "$SSHD_MANAGED_CONFIG"; then
+	for config_file in "$SSHD_MANAGED_CONFIG" "$SSHD_LEGACY_MANAGED_CONFIG"; do
+		if [ ! -f "$config_file" ]; then
+			continue
+		fi
+		if [ -z "$existing_port" ]; then
+			existing_port=$(awk 'tolower($1) == "port" {print $2; exit}' "$config_file")
+		fi
+		if grep -Eiq '^[[:space:]]*PasswordAuthentication[[:space:]]+no' "$config_file"; then
 			password_disabled=true
 		fi
-	fi
+	done
 
 	final_port=${new_port:-$existing_port}
 	tmp_file=$(mktemp)
@@ -214,6 +269,9 @@ write_ssh_managed_config() {
 	} >"$tmp_file"
 
 	mv "$tmp_file" "$SSHD_MANAGED_CONFIG"
+	if [ "$SSHD_LEGACY_MANAGED_CONFIG" != "$SSHD_MANAGED_CONFIG" ]; then
+		rm -f "$SSHD_LEGACY_MANAGED_CONFIG"
+	fi
 }
 
 verify_ssh_password_disabled() {
@@ -243,9 +301,15 @@ verify_ssh_password_disabled() {
 
 verify_ssh_port_effective() {
 	local expected_port=$1
+	local effective_ports
 
-	if ! dump_effective_ssh_config | awk '$1 == "port" {print $2}' | grep -qx "$expected_port"; then
+	effective_ports=$(dump_effective_ssh_config | awk '$1 == "port" {print $2}') || return 1
+	if ! grep -qx "$expected_port" <<<"$effective_ports"; then
 		echo "错误: SSH 生效配置中未找到端口 $expected_port。" >&2
+		return 1
+	fi
+	if grep -vx "$expected_port" <<<"$effective_ports" >/dev/null; then
+		echo "错误: SSH 生效配置中仍存在其它端口。" >&2
 		return 1
 	fi
 }
@@ -662,15 +726,20 @@ remove_all_swap() {
 	local item
 	local fstab_backup=""
 	local tmp_fstab
+	local has_fstab_swap=false
 
 	mapfile -t swap_items < <(awk 'NR > 1 {print $1}' /proc/swaps | sort -u)
 
-	if [ ${#swap_items[@]} -eq 0 ]; then
-		echo "未检测到活动 swap。"
+	if [ -f /etc/fstab ] && awk '$0 !~ /^[[:space:]]*#/ && $3 == "swap" { found = 1 } END { exit !found }' /etc/fstab; then
+		has_fstab_swap=true
+	fi
+
+	if [ ${#swap_items[@]} -eq 0 ] && [ "$has_fstab_swap" = false ]; then
+		echo "未检测到活动 swap 或 /etc/fstab swap 配置。"
 		return 0
 	fi
 
-	if [ -f /etc/fstab ]; then
+	if [ "$has_fstab_swap" = true ]; then
 		fstab_backup="/etc/fstab.bak.$(date +%Y%m%d_%H%M%S)"
 		cp /etc/fstab "$fstab_backup"
 		echo "已备份 /etc/fstab 到 $fstab_backup"
@@ -690,12 +759,15 @@ remove_all_swap() {
 			echo "已禁用 swap 设备：$item（未删除设备节点）"
 		fi
 
-		if [ -f /etc/fstab ]; then
-			tmp_fstab=$(mktemp)
-			awk -v target="$item" '$1 != target {print}' /etc/fstab >"$tmp_fstab"
-			mv "$tmp_fstab" /etc/fstab
-		fi
 	done
+
+	if [ "$has_fstab_swap" = true ]; then
+		tmp_fstab=$(mktemp)
+		awk '$0 ~ /^[[:space:]]*#/ || $3 != "swap" { print }' /etc/fstab >"$tmp_fstab"
+		cat "$tmp_fstab" >/etc/fstab
+		rm -f "$tmp_fstab"
+		echo "已从 /etc/fstab 删除所有 swap 配置行。"
+	fi
 
 	echo "swap 处理完成。"
 }
@@ -1013,6 +1085,12 @@ uninstall_debian_cloud_kernel() {
 modify_ssh_port() {
 	local current_port opened_new_port=false
 	local backup_dir
+
+	if [ ! -f "$SSHD_CONFIG" ]; then
+		echo "错误: sshd_config 文件不存在于 $SSHD_CONFIG"
+		return 1
+	fi
+
 	current_port=$(dump_effective_ssh_config 2>/dev/null | awk '$1 == "port" {print $2; exit}')
 
 	if [ -z "$current_port" ]; then
@@ -1030,6 +1108,7 @@ modify_ssh_port() {
 	echo "正在修改 SSH 端口为 $new_port..."
 	backup_dir=$(backup_ssh_state)
 	ensure_sshd_dropin_include
+	comment_conflicting_ssh_ports
 	write_ssh_managed_config "$new_port" "keep"
 
 	if ! validate_ssh_config || ! verify_ssh_port_effective "$new_port"; then
