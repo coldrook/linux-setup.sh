@@ -77,7 +77,8 @@ check_fail2ban_available() {
 
 # 检测并修复日志配置
 setup_logging() {
-    local os_type=$(get_os_info)
+    local os_type
+    os_type=$(get_os_info)
     
     echo "🔍 正在检查系统日志配置..."
     
@@ -118,8 +119,9 @@ setup_logging() {
 
 # 检测 SSH 日志文件路径
 detect_ssh_log_path() {
-    local os_type=$(get_os_info)
+    local os_type
     local possible_logs=()
+    os_type=$(get_os_info)
     
     case $os_type in
         "Debian/Ubuntu")
@@ -146,7 +148,8 @@ detect_ssh_log_path() {
 
 # 安装 Fail2ban
 install_fail2ban() {
-    local os_type=$(get_os_info)
+    local os_type
+    os_type=$(get_os_info)
     
     echo "正在检查 Fail2ban 是否已安装..."
     
@@ -244,16 +247,19 @@ generate_fail2ban_config() {
     local ban_time_hours=$3
     
     local ban_time_seconds=$((ban_time_hours * 3600))
-    local jail_local="/etc/fail2ban/jail.local"
+    local jail_local="/etc/fail2ban/jail.d/sshd-linux-setup.local"
     local custom_comment="# SSH protection configured by fail2ban.sh script"
-    local log_path=$(detect_ssh_log_path)
-    local os_type=$(get_os_info)
+    local log_path
+    log_path=$(detect_ssh_log_path)
     
     echo "🔧 正在生成 Fail2ban 配置..."
     
-    # 备份现有配置（如果存在）
+    mkdir -p /etc/fail2ban/jail.d
+
+    # 只备份脚本管理的配置（如果存在），避免覆盖用户自己的 jail.local。
     if [ -f "$jail_local" ]; then
-        local backup_file="${jail_local}.bak.$(date +%Y%m%d_%H%M%S)"
+        local backup_file
+        backup_file="${jail_local}.bak.$(date +%Y%m%d_%H%M%S)"
         echo "📦 备份现有配置到: $backup_file"
         cp "$jail_local" "$backup_file"
     fi
@@ -399,7 +405,7 @@ verify_configuration() {
     echo "   • 请确保您的 IP 地址不会被误封"
     echo "   • 可以使用 'fail2ban-client status sshd' 查看状态"
     echo "   • 可以使用 'fail2ban-client unban IP地址' 解封特定IP"
-    echo "   • 配置文件位置: /etc/fail2ban/jail.local"
+    echo "   • 配置文件位置: /etc/fail2ban/jail.d/sshd-linux-setup.local"
     echo "   • 查看日志: journalctl -u fail2ban -f"
 }
 

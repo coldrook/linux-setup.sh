@@ -20,7 +20,7 @@ install_xanmod() {
     debug_echo() {
         if [[ "$DEBUG" == "true" ]]; then
             # 使用 >&2 将调试信息输出到标准错误，不影响管道中的正常输出
-            echo "DEBUG: $@" >&2
+            echo "DEBUG: $*" >&2
         fi
     }
     # --- 调试模式设置结束 ---

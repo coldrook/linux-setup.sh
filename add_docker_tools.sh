@@ -98,11 +98,28 @@ alias dc="bash ${tools_dir}/dc.sh"
 alias dcs="bash ${tools_dir}/dcstats.sh"
 alias dcps="bash ${tools_dir}/dcps.sh"
 alias dcip="bash ${tools_dir}/dcip.sh"
-alias dlogs="bash ${tools_dir}/dlogs.sh"
 alias dclogs="bash ${tools_dir}/dclogs.sh"
 alias dr="bash ${tools_dir}/drestart.sh"
 alias dcr="bash ${tools_dir}/dcrestart.sh"
-alias dexec="bash ${tools_dir}/dexec.sh"
+
+unalias dlogs dexec 2>/dev/null
+
+dlogs() {
+    bash "${tools_dir}/dlogs.sh" "\$@"
+}
+
+dexec() {
+    bash "${tools_dir}/dexec.sh" "\$@"
+}
+
+_docker_tools_container_names() {
+    local current="\${COMP_WORDS[COMP_CWORD]}"
+    local containers
+    containers=\$(docker ps --format '{{.Names}}' 2>/dev/null)
+    mapfile -t COMPREPLY < <(compgen -W "\$containers" -- "\$current")
+}
+
+complete -F _docker_tools_container_names dlogs dexec
 EOF
 
     # --- 使用循环下载其余的脚本，并进行错误检查 ---

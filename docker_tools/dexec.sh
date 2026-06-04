@@ -5,8 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 # 引用docker_utils脚本
 source "${SCRIPT_DIR}/docker_utils.sh"
 
-# 选择容器并获取容器名
-container=$(select_container "请选择要进入的容器：")
+# 选择容器并获取容器名；支持命令行参数传入编号或容器名。
+container=$(container_arg_or_select "$1" "请选择要进入的容器：") || exit 1
 
 echo "正在尝试进入容器 ${container}..."
 

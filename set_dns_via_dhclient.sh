@@ -30,11 +30,29 @@ CUSTOM_DNS_COMMENT="# Custom DNS servers added by script (set_dns_via_dhclient.s
 
 # --- 脚本主体 ---
 
-# 1. 检查 dhclient.conf 文件是否存在
+# 1. 确认当前系统具备 dhclient 配置环境
+if ! command -v dhclient &>/dev/null; then
+  echo "❌ 错误：未检测到 dhclient。此脚本仅适用于使用 dhclient 的系统。"
+  exit 1
+fi
+
+if [ ! -d "$(dirname "$DHCLIENT_CONF")" ]; then
+  echo "❌ 错误：未检测到 /etc/dhcp 目录，无法确认系统使用 dhclient。"
+  exit 1
+fi
+
+if command -v systemctl &>/dev/null && systemctl is-active --quiet systemd-resolved; then
+  echo "❌ 错误：检测到 systemd-resolved 正在运行，当前系统可能不使用 dhclient 管理 DNS。"
+  echo "请使用 systemd-resolved 或 NetworkManager 对应的 DNS 配置方式。"
+  exit 1
+fi
+
 if [ ! -f "$DHCLIENT_CONF" ]; then
-  echo "⚠️  警告：配置文件 ${DHCLIENT_CONF} 不存在。"
-  echo "正在尝试创建一个最小化的配置文件..."
-  touch "$DHCLIENT_CONF"
+  echo "⚠️  配置文件 ${DHCLIENT_CONF} 不存在，将创建一个新的 dhclient 配置文件。"
+  touch "$DHCLIENT_CONF" || {
+    echo "❌ 错误：无法创建 ${DHCLIENT_CONF}。"
+    exit 1
+  }
 fi
 
 # 2. 备份原始配置文件 (如果尚未备份)
@@ -74,30 +92,14 @@ echo "➕ 正在添加新的 DNS 配置..."
 
 echo "✅ 配置文件修改完成。"
 
-# 4. 应用网络配置
-echo "🔄 正在重新应用网络配置以使 DNS 生效..."
-# 这会短暂中断网络连接，通常几秒钟内恢复
-# 首先尝试重启 networking.service，这是Debian的经典方式
-if command -v systemctl &> /dev/null && systemctl is-active networking.service &> /dev/null; then
-    systemctl restart networking.service
-    sleep 3 # 等待网络稳定
-else
-    # 如果 networking.service 不可用，尝试用 ifupdown 重启主接口
-    INTERFACE=$(ip -4 route ls | grep default | grep -Eo 'dev [^ ]+' | awk '{print $2}' | head -n1)
-    if [ -n "$INTERFACE" ] && command -v ifdown &> /dev/null && command -v ifup &> /dev/null; then
-        echo "检测到主网络接口为: ${INTERFACE}。正在使用 ifdown/ifup 重启..."
-        ifdown "$INTERFACE" && ifup "$INTERFACE"
-        sleep 5 # 等待更长时间，因为 ifup/ifdown 可能更慢
-    else
-        echo "⚠️  警告: 无法自动重启网络服务。"
-        echo "👉 请手动重启VPS ('sudo reboot') 来应用更改。"
-    fi
-fi
+# 4. 应用提示
+echo "✅ DNS 配置已写入 dhclient.conf。"
+echo "⚠️  为避免远程服务器断网，脚本不会自动重启 networking 或执行 ifdown/ifup。"
+echo "👉 请在确认有备用连接后，手动续租 DHCP 或重启服务器使配置生效。"
 
-chmod 644 /etc/resolv.conf
 # 5. 验证结果
 echo "-----------------------------------------------------"
-echo "🎉 配置完成！正在验证..."
+echo "🎉 配置完成！当前 /etc/resolv.conf 可能要在 DHCP 续租后才会变化。"
 
 if [ -f "/etc/resolv.conf" ]; then
     echo "
@@ -119,4 +121,4 @@ else
     echo "❌ 错误: /etc/resolv.conf 文件未找到。配置可能未生效。"
 fi
 
-echo -e "\n✨ 脚本执行完毕。如果验证成功，您的 DNS 已被修改，并且重启后依然有效。"
+echo -e "\n✨ 脚本执行完毕。配置将在 dhclient 重新获取租约后生效。"
