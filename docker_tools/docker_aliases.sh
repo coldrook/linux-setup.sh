@@ -22,9 +22,19 @@ dexec() {
 
 _docker_tools_container_names() {
     local current="${COMP_WORDS[COMP_CWORD]}"
-    local containers
-    containers=$(docker ps --format '{{.Names}}' 2>/dev/null)
-    mapfile -t COMPREPLY < <(compgen -W "$containers" -- "$current")
+    local containers=()
+    local i name candidate index
+    mapfile -t containers < <(docker ps --format '{{.Names}}' 2>/dev/null)
+    compopt -o nosort 2>/dev/null || true
+    COMPREPLY=()
+    for i in "${!containers[@]}"; do
+        index=$((i + 1))
+        name="${containers[$i]}"
+        candidate="${index}. ${name}"
+        if [ -z "$current" ] || [[ "$candidate" == "$current"* ]] || [[ "$name" == "$current"* ]] || [[ "$index" == "$current"* ]]; then
+            COMPREPLY+=("$candidate")
+        fi
+    done
 }
 
 complete -F _docker_tools_container_names dlogs dexec

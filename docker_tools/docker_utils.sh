@@ -97,9 +97,10 @@ select_container() {
             continue
         fi
 
-        if [[ "$input" =~ ^[0-9]+$ ]]; then
-            if ((input > 0 && input <= ${#containers[@]})); then
-                selected_container="${containers[$((input-1))]}"
+        if [[ "$input" =~ ^([0-9]+)([.]([[:space:]].*)?)?$ ]]; then
+            local input_index="${BASH_REMATCH[1]}"
+            if ((input_index > 0 && input_index <= ${#containers[@]})); then
+                selected_container="${containers[$((input_index-1))]}"
                 break
             else
                 echo "输入的数字无效，请输入 1 到 ${#containers[@]} 之间的数字。" >&2
@@ -138,9 +139,10 @@ resolve_container() {
         return 1
     fi
 
-    if [[ "$input" =~ ^[0-9]+$ ]]; then
-        if ((input > 0 && input <= ${#containers[@]})); then
-            echo "${containers[$((input-1))]}"
+    if [[ "$input" =~ ^([0-9]+)([.]([[:space:]].*)?)?$ ]]; then
+        local input_index="${BASH_REMATCH[1]}"
+        if ((input_index > 0 && input_index <= ${#containers[@]})); then
+            echo "${containers[$((input_index-1))]}"
             return 0
         else
             echo "输入的数字无效，请输入 1 到 ${#containers[@]} 之间的数字。" >&2

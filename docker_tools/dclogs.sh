@@ -13,7 +13,7 @@ select_docker_compose_dir
 # 显示docker-compose信息
 # shellcheck disable=SC2154 # selected_folder/compose_cmd 由 docker_utils.sh 设置
 echo "正在检查 $selected_folder 的 $compose_cmd 容器信息..."
-$compose_cmd logs -f -n 10
+run_docker_compose logs -f -n 10 "$@"
 
 # 检查命令是否执行成功
 if [ $? -ne 0 ]; then
