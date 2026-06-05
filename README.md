@@ -63,20 +63,20 @@
 
 ---
 
-### **：Docker 工具箱使用说明 🐳**
+### **Docker 工具箱使用说明 🐳**
 
 | 命令 | 原始命令 | 功能说明 |
 | :--- | :--- | :--- |
-| `nginx` | `docker nginx ...` | 快捷执行 `docker nginx` 相关命令。 |
+| `nginx` | `docker exec -i docker_nginx nginx ...` | 快捷执行 `docker_nginx` 容器内的 `nginx` 命令。 |
 | `dc` | `docker-compose` | `docker-compose` 的缩写，核心提效工具。 |
-| `dlogs <容器>` | `docker logs -f <容器>` | 实时追踪指定容器的日志。 |
-| `dclogs <服务>` | `docker-compose logs -f <服务>` | 实时追踪指定 Compose 服务的日志。 |
-| `dcs` | `docker-compose ps` | 查看 Compose 项目中各个服务的状态。 |
-| `dcps` | `docker-compose stats` | 查看 Compose 项目中各个服务的cpu ram 使用情况 |
+| `dlogs [编号/容器名]` | `docker logs -f <容器>` | 实时追踪容器日志；无参数时列出容器，支持编号、容器名和补全候选 `1. 容器名`。 |
+| `dclogs [服务...]` | `docker-compose logs -f -n 10 [服务...]` | 实时追踪 Compose 日志；不传服务名时查看全部服务。 |
+| `dcs` | `docker-compose stats` | 查看 Compose 项目中各个服务的 CPU、内存等资源占用。 |
+| `dcps` | `docker-compose ps` | 查看 Compose 项目中各个服务的状态。 |
 | `dr <容器>` | `docker restart <容器>` | 快速重启单个 Docker 容器。 |
-| `dcr [-r/-R] <服务>` | `docker-compose restart/up -d --force-recreate <服务>` | 重启 Compose 服务。`-r` 普通重启，`-R` 则强制重建。 |
-| `dexec <容器>` | `docker exec -it <容器> /bin/bash` | 快速进入指定容器的 Shell 环境，方便调试。 |
-| `dspa` | `docker system prune -af` | 一键清理所有不再使用的镜像、容器、网络，释放磁盘空间。 |
+| `dcr [-r/-R] [服务...]` | `docker-compose restart/up -d --force-recreate [服务...]` | 重启 Compose 服务；`-r` 普通重启，`-R` 强制重建，不传服务名时作用于整个项目。 |
+| `dexec [编号/容器名]` | `docker exec -it <容器> bash/sh` | 快速进入容器 Shell；支持编号、容器名和补全候选 `1. 容器名`。 |
+| `dspa` | `docker system prune -a` | 清理不再使用的镜像、容器、网络，释放磁盘空间。 |
 | `dcip` | (自定义函数) | 遍历所有容器 IP，并自动添加到宿主机的 `/etc/hosts`，让你能直接通过容器名 `ping` 通或访问。 |
 
 ---
@@ -104,5 +104,7 @@
 ## 注意事项 ⚠️
 
   - **权限**: 脚本需要 `root` 权限才能进行系统级修改。
-  - **安全操作**: 修改 SSH 端口、禁用密码登录等操作不可逆，请在操作前确保你已有新的、可靠的连接方式。
+  - **安全操作**: 修改 SSH 端口、禁用密码登录会直接写入 `/etc/ssh/sshd_config`，脚本会自动备份并用 `sshd -t` 校验；操作前仍请确保你已有新的、可靠的连接方式。
+  - **Docker 工具**: 安装 Docker 工具箱会覆盖 `/root/.docker_tools` 下的同名脚本，这是为了让远程安装命令始终拿到最新版本。
+  - **Swap**: 设置 Swap 会同时检查活动 Swap 和 `/etc/fstab` 中未注释的 Swap 配置；检测到已有配置时，会先询问是否清理。
   - **反馈**: 如果你觉得这个脚本对你有帮助，或者发现了 Bug，欢迎来 [GitHub Issues](https://github.com/SuperNG6/linux-setup.sh/issues) 给我提建议！

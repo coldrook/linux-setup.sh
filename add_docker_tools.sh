@@ -50,16 +50,16 @@ cat << EOF
 -----------------------------------
 功能列表：
 - nginx: 直接执行容器内的 nginx -t, reload 等命令
-- dlogs: [容器名] - 查看指定容器的日志
-- dclogs: [服务名] - 查看 docker-compose 服务的日志
+- dlogs: [编号/容器名] - 查看指定容器的日志，支持补全候选 "1. 容器名"
+- dclogs: [服务名...] - 查看 docker-compose 服务的日志，不传服务名时查看全部服务
 - dspa: 清理不再使用的 Docker 镜像、容器和网络
 - dc: 等同于 'docker-compose'
-- dcs: 查看 docker-compose 容器状态
+- dcs: 查看 docker-compose 容器资源统计
 - dcps: 查看 docker-compose 容器列表
 - dcip: [容器名] - 查看容器 IP 并尝试添加到 hosts
 - dr: [容器名] - 重启指定容器
-- dcr: [服务名] - 重启指定的 compose 服务
-- dexec: [容器名] - 进入指定容器的 shell 环境
+- dcr: [-r|-R] [服务名...] - 重启 compose 服务，不传服务名时作用于整个项目
+- dexec: [编号/容器名] - 进入指定容器的 shell 环境，支持补全候选 "1. 容器名"
 
 工具脚本将保存在 "${tools_dir}" 文件夹中。
 -----------------------------------

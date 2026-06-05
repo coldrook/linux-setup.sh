@@ -271,13 +271,7 @@ generate_fail2ban_config() {
     local jail_local="/etc/fail2ban/jail.d/sshd-linux-setup.local"
     local custom_comment="# SSH protection configured by fail2ban.sh script"
     local log_path
-    local effective_ssh_port
     log_path=$(detect_ssh_log_path)
-    effective_ssh_port=$(get_ssh_port)
-    if [ -n "$effective_ssh_port" ] && [ "$effective_ssh_port" != "$ssh_port" ]; then
-        echo "🔍 SSH 生效端口为 $effective_ssh_port，已覆盖传入端口 $ssh_port。"
-        ssh_port="$effective_ssh_port"
-    fi
     
     echo "🔧 正在生成 Fail2ban 配置..."
     

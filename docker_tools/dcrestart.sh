@@ -21,14 +21,15 @@ while getopts "rR" opt; do
       RESTART_MODE="-R"
       ;;
     \? )
-      echo "用法: $0 [-r] [-R]"
+      echo "用法: $0 [-r] [-R] [服务名...]"
       # shellcheck disable=SC2154 # compose_cmd 由 docker_utils.sh 设置
       echo "  -r: 快速重启 (默认, 使用 $compose_cmd restart)"
-      echo "  -R: 完全重建 (使用 $compose_cmd down 和 up)"
+      echo "  -R: 强制重建 (使用 $compose_cmd up -d --force-recreate)"
       exit 1
       ;;
   esac
 done
+shift $((OPTIND - 1))
 
 # 文件夹选择
 select_docker_compose_dir
@@ -36,10 +37,10 @@ select_docker_compose_dir
 # 执行重启
 if [ "$RESTART_MODE" = "-r" ]; then
     echo "执行快速重启..."
-    $compose_cmd restart
+    run_docker_compose restart "$@"
 else
-    echo "执行完全重建..."
-    $compose_cmd down && $compose_cmd up -d
+    echo "执行强制重建..."
+    run_docker_compose up -d --force-recreate "$@"
 fi
 
 if [ $? -eq 0 ]; then

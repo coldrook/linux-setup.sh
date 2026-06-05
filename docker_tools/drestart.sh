@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/docker_utils.sh"
 
 # 选择容器
-container=$(select_container "请选择要重启的容器：")
+container=$(select_container "请选择要重启的容器：") || exit 1
 
 # 执行docker restart命令
 docker restart "$container"
